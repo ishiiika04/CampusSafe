@@ -14,8 +14,16 @@ import javafx.scene.chart.XYChart;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.stage.Stage;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.Duration;
+import java.util.List;
+import java.util.Locale;
 
 public class Main extends Application {
+
+    static final DateTimeFormatter DB_DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     Stage stage;
 
@@ -23,6 +31,8 @@ public class Main extends Application {
             FXCollections.observableArrayList();
 
     int incidentNumber = 1;
+    boolean databaseReady = false;
+    Database.User currentUser;
 
     String background = "#F4F7FB";
     String white = "#FFFFFF";
@@ -38,12 +48,59 @@ public class Main extends Application {
     String secondaryText = "#68738A";
     String border = "#DCE2EC";
 
-    @Override
     public void start(Stage s) {
         stage = s;
         stage.setTitle("CampusSafe");
+
+        try {
+            Database.createTables();
+            Database.ensureDefaultAdmin();
+            loadIncidentsFromDatabase();
+            databaseReady = true;
+            System.out.println("CampusSafe connected to MySQL.");
+        } catch (SQLException ex) {
+            databaseReady = false;
+            System.out.println("MySQL is not connected: " + ex.getMessage());
+            System.out.println("CampusSafe will open in temporary in-memory mode.");
+        }
+
         login();
         stage.show();
+    }
+
+    void loadIncidentsFromDatabase() throws SQLException {
+        List<Incident> savedIncidents = Database.getIncidents();
+        incidents.setAll(savedIncidents);
+
+        int largestNumber = 0;
+        for (Incident incident : incidents) {
+            try {
+                String numberText = incident.id.get().replace("INC-", "");
+                largestNumber = Math.max(largestNumber, Integer.parseInt(numberText));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        incidentNumber = largestNumber + 1;
+    }
+
+    void refreshIncidentsFromDatabase() {
+        if (!databaseReady) {
+            return;
+        }
+
+        try {
+            loadIncidentsFromDatabase();
+        } catch (SQLException ex) {
+            databaseReady = false;
+            showDatabaseWarning("Could not refresh records from MySQL. " + ex.getMessage());
+        }
+    }
+
+    void showDatabaseWarning(String details) {
+        new Alert(
+                Alert.AlertType.WARNING,
+                details + "\n\nPlease check MySQL and src/main/java/com/campussafe/Database.java settings."
+        ).showAndWait();
     }
 
     Label title(String value) {
@@ -104,6 +161,15 @@ public class Main extends Application {
         );
     }
 
+    HBox requiredFieldLabel(String value) {
+        Label label = new Label(value);
+        Label star = new Label("*");
+        star.setStyle("-fx-text-fill:#D32F2F;-fx-font-weight:bold;");
+        HBox row = new HBox(2, label, star);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
     VBox card() {
         VBox box = new VBox(10);
         box.setPadding(new Insets(20));
@@ -117,122 +183,145 @@ public class Main extends Application {
     }
 
     void login() {
-
         BorderPane root = new BorderPane();
         root.setStyle("-fx-background-color:" + background + ";");
-
         VBox center = new VBox(20);
         center.setAlignment(Pos.CENTER);
         center.setPadding(new Insets(40));
 
         Label logo = new Label("CampusSafe");
-        logo.setStyle(
-                "-fx-font-size:38px;" +
-                "-fx-font-weight:bold;" +
-                "-fx-text-fill:" + primaryDark + ";"
-        );
-
-        Label sub = new Label(
-                "Smart Campus Emergency & Response Management System"
-        );
-        sub.setStyle(
-                "-fx-font-size:15px;" +
-                "-fx-text-fill:" + secondaryText + ";"
-        );
+        logo.setStyle("-fx-font-size:38px;-fx-font-weight:bold;-fx-text-fill:" + primaryDark + ";");
+        Label sub = new Label("Smart Campus Emergency & Response Management System");
+        sub.setStyle("-fx-font-size:15px;-fx-text-fill:" + secondaryText + ";");
 
         VBox loginCard = card();
         loginCard.setMaxWidth(440);
         loginCard.setPadding(new Insets(30));
-
         Label loginTitle = new Label("Welcome Back");
-        loginTitle.setStyle(
-                "-fx-font-size:22px;" +
-                "-fx-font-weight:bold;" +
-                "-fx-text-fill:" + text + ";"
-        );
-
-        Label loginSub = subtitle(
-                "Sign in to access the CampusSafe system"
-        );
+        loginTitle.setStyle("-fx-font-size:22px;-fx-font-weight:bold;-fx-text-fill:" + text + ";");
+        Label loginSub = subtitle("Sign in with your registered account");
 
         TextField username = new TextField();
         username.setPromptText("Username");
         username.setPrefHeight(42);
         styleField(username);
-
         PasswordField password = new PasswordField();
         password.setPromptText("Password");
         password.setPrefHeight(42);
         styleField(password);
-
-        ComboBox<String> role = new ComboBox<>(
-                FXCollections.observableArrayList(
-                        "Student",
-                        "Responder",
-                        "Admin"
-                )
-        );
-
+        ComboBox<String> role = new ComboBox<>(FXCollections.observableArrayList("Student", "Responder", "Admin"));
         role.setPromptText("Select Role");
         role.setPrefHeight(42);
         role.setMaxWidth(Double.MAX_VALUE);
         styleField(role);
-
         Label message = new Label();
-        message.setStyle(
-                "-fx-text-fill:#C85A65;" +
-                "-fx-font-size:13px;"
-        );
+        message.setWrapText(true);
+        message.setStyle("-fx-text-fill:#C85A65;-fx-font-size:13px;");
 
         Button loginButton = primaryButton("Login");
         loginButton.setMaxWidth(Double.MAX_VALUE);
-
         loginButton.setOnAction(e -> {
-
-            if (username.getText().isBlank()
-                    || password.getText().isBlank()
-                    || role.getValue() == null) {
-
-                message.setText(
-                        "Please enter username, password and role."
-                );
+            if (username.getText().isBlank() || password.getText().isBlank() || role.getValue() == null) {
+                message.setText("Please enter username, password and role.");
                 return;
             }
-
-            switch (role.getValue()) {
-
-                case "Student" -> student();
-
-                case "Responder" -> responder();
-
-                case "Admin" -> admin();
+            if (!databaseReady) {
+                message.setText("MySQL is not connected. Start MySQL and check Database.java password.");
+                return;
+            }
+            try {
+                Database.User user = Database.authenticate(username.getText(), password.getText(), role.getValue());
+                if (user == null) {
+                    message.setText("Incorrect username, password or role.");
+                    return;
+                }
+                currentUser = user;
+                refreshIncidentsFromDatabase();
+                switch (user.role) {
+                    case "Student" -> student();
+                    case "Responder" -> responder();
+                    case "Admin" -> admin();
+                    default -> message.setText("This account role is not supported.");
+                }
+            } catch (SQLException ex) {
+                message.setText("Login failed: " + ex.getMessage());
             }
         });
 
-        loginCard.getChildren().addAll(
-                loginTitle,
-                loginSub,
-                new Label("Username"),
-                username,
-                new Label("Password"),
-                password,
-                new Label("Role"),
-                role,
-                loginButton,
-                message
-        );
+        Button createAccount = secondaryButton("Create Student / Responder Account");
+        createAccount.setMaxWidth(Double.MAX_VALUE);
+        createAccount.setOnAction(e -> registerScreen());
 
-        center.getChildren().addAll(
-                logo,
-                sub,
-                loginCard
-        );
+        Label starterAdmin = new Label("First admin login: admin  |  Admin@123");
+        starterAdmin.setWrapText(true);
+        starterAdmin.setStyle("-fx-text-fill:" + secondaryText + ";-fx-font-size:12px;");
 
+        loginCard.getChildren().addAll(loginTitle, loginSub, new Label("Username"), username,
+                new Label("Password"), password, new Label("Role"), role, loginButton,
+                createAccount, message, starterAdmin);
+        center.getChildren().addAll(logo, sub, loginCard);
         root.setCenter(center);
+        stage.setScene(new Scene(root, 1100, 760));
+    }
 
-        Scene scene = new Scene(root, 1100, 700);
-
-        stage.setScene(scene);
+    void registerScreen() {
+        BorderPane root = new BorderPane();
+        root.setStyle("-fx-background-color:" + background + ";");
+        VBox form = card();
+        form.setMaxWidth(470);
+        form.setPadding(new Insets(30));
+        Label heading = title("Create Account");
+        Label note = subtitle("Register a Student or Responder account. Admin accounts are created separately.");
+        note.setWrapText(true);
+        TextField fullName = new TextField();
+        fullName.setPromptText("Full name");
+        styleField(fullName);
+        TextField username = new TextField();
+        username.setPromptText("Choose username");
+        styleField(username);
+        PasswordField password = new PasswordField();
+        password.setPromptText("Create password (minimum 6 characters)");
+        styleField(password);
+        ComboBox<String> role = new ComboBox<>(FXCollections.observableArrayList("Student", "Responder"));
+        role.setPromptText("Account type");
+        role.setMaxWidth(Double.MAX_VALUE);
+        styleField(role);
+        Label message = new Label();
+        message.setWrapText(true);
+        Button create = primaryButton("Create Account");
+        create.setMaxWidth(Double.MAX_VALUE);
+        create.setOnAction(e -> {
+            if (fullName.getText().isBlank() || username.getText().isBlank() || password.getText().length() < 6 || role.getValue() == null) {
+                message.setText("Fill every field. Password must have at least 6 characters.");
+                return;
+            }
+            if (!databaseReady) {
+                message.setText("MySQL is not connected. Check the connection first.");
+                return;
+            }
+            try {
+                Database.registerUser(fullName.getText(), username.getText(), password.getText(), role.getValue());
+                new Alert(Alert.AlertType.INFORMATION, "Account created! Return to Login and sign in.").showAndWait();
+                login();
+            } catch (SQLException ex) {
+                if (ex.getMessage() != null && ex.getMessage().contains("Duplicate")) {
+                    message.setText("That username is already taken. Choose another one.");
+                } else {
+                    message.setText("Could not create account: " + ex.getMessage());
+                }
+            }
+        });
+        Button back = secondaryButton("Back to Login");
+        back.setMaxWidth(Double.MAX_VALUE);
+        back.setOnAction(e -> { currentUser = null; login(); });
+        form.getChildren().addAll(heading, note, new Label("Full Name"), fullName,
+                new Label("Username"), username, new Label("Password"), password,
+                new Label("Role"), role, create, back, message);
+        VBox wrapper = new VBox(form);
+        wrapper.setAlignment(Pos.CENTER);
+        wrapper.setPadding(new Insets(30));
+        root.setCenter(wrapper);
+        stage.setScene(new Scene(root, 1000, 720));
     }
 
     String priority(String type) {
@@ -253,6 +342,36 @@ public class Main extends Application {
 
             default -> "LOW";
         };
+    }
+
+    boolean isDuplicateIncident(String type, String location, String description) {
+        LocalDateTime now = LocalDateTime.now();
+        String normalizedType = normalizeText(type);
+        String normalizedLocation = normalizeText(location);
+        String normalizedDescription = normalizeText(description);
+
+        for (Incident existing : incidents) {
+            if (!normalizeText(existing.type.get()).equals(normalizedType)
+                    || !normalizeText(existing.location.get()).equals(normalizedLocation)
+                    || !normalizeText(existing.description.get()).equals(normalizedDescription)) {
+                continue;
+            }
+            try {
+                LocalDateTime reportedAt = LocalDateTime.parse(existing.reportedAt.get(), DB_DATE_TIME);
+                long minutes = Math.abs(Duration.between(reportedAt, now).toMinutes());
+                if (minutes <= 10) {
+                    return true;
+                }
+            } catch (Exception ignored) {
+                // If a legacy timestamp cannot be parsed, do not block the report.
+            }
+        }
+        return false;
+    }
+
+    String normalizeText(String value) {
+        if (value == null) return "";
+        return value.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
     }
 
     void student() {
@@ -299,10 +418,56 @@ public class Main extends Application {
         type.setMaxWidth(Double.MAX_VALUE);
         styleField(type);
 
-        TextField location = new TextField();
-        location.setPromptText("Enter campus location");
+        // Campus location dropdown. Replace/add options to match your actual campus map.
+        ComboBox<String> location = new ComboBox<>(
+                FXCollections.observableArrayList(
+                        "Main Gate",
+                        "Reception / Security Office",
+                        "Administrative Block",
+                        "Academic Block A",
+                        "Academic Block B",
+                        "Computer Lab",
+                        "Science Lab",
+                        "Library",
+                        "Auditorium",
+                        "Seminar Hall",
+                        "Canteen / Cafeteria",
+                        "Boys Hostel",
+                        "Girls Hostel",
+                        "Hostel Mess",
+                        "Medical Room",
+                        "Faculty Rooms",
+                        "Parking Area",
+                        "Sports Ground",
+                        "Indoor Sports Complex",
+                        "Garden / Open Area",
+                        "Staircase / Corridor",
+                        "Lift Area",
+                        "Washroom",
+                        "Electrical / Maintenance Room",
+                        "Other Campus Location"
+                )
+        );
+        location.setPromptText("Select campus location");
         location.setPrefHeight(42);
+        location.setMaxWidth(Double.MAX_VALUE);
         styleField(location);
+
+        TextField otherLocation = new TextField();
+        otherLocation.setPromptText("Enter exact campus location");
+        otherLocation.setPrefHeight(42);
+        styleField(otherLocation);
+        otherLocation.setVisible(false);
+        otherLocation.setManaged(false);
+
+        location.setOnAction(e -> {
+            boolean isOther = "Other Campus Location".equals(location.getValue());
+            otherLocation.setVisible(isOther);
+            otherLocation.setManaged(isOther);
+            if (!isOther) {
+                otherLocation.clear();
+            }
+        });
 
         TextArea description = new TextArea();
         description.setPromptText(
@@ -373,8 +538,14 @@ public class Main extends Application {
 
         submit.setOnAction(e -> {
 
+            String selectedLocation = location.getValue();
+            if (selectedLocation != null && selectedLocation.equals("Other Campus Location")) {
+                selectedLocation = otherLocation.getText().trim();
+            }
+
             if (type.getValue() == null
-                    || location.getText().isBlank()
+                    || selectedLocation == null
+                    || selectedLocation.isBlank()
                     || description.getText().isBlank()) {
 
                 new Alert(
@@ -386,9 +557,16 @@ public class Main extends Application {
             }
 
             String selectedType = type.getValue();
-            String selectedLocation = location.getText();
-            String selectedDescription = description.getText();
+            String selectedDescription = description.getText().trim();
             String selectedPriority = priority(selectedType);
+
+            if (isDuplicateIncident(selectedType, selectedLocation, selectedDescription)) {
+                new Alert(
+                        Alert.AlertType.WARNING,
+                        "Possible duplicate detected! An identical incident with the same type, location and description was reported within the last 10 minutes. Please check the existing incident before submitting again."
+                ).showAndWait();
+                return;
+            }
 
             String id = String.format(
                     "INC-%03d",
@@ -399,9 +577,22 @@ public class Main extends Application {
                     id,
                     selectedType,
                     selectedLocation,
+                    selectedDescription,
                     selectedPriority,
-                    "Reported"
+                    "Reported",
+                    LocalDateTime.now().format(DB_DATE_TIME)
             );
+
+            if (databaseReady) {
+                try {
+                    Database.saveIncident(incident);
+                } catch (SQLException ex) {
+                    databaseReady = false;
+                    showDatabaseWarning("The report could not be saved to MySQL. It will remain only until the app closes. " + ex.getMessage());
+                }
+            } else {
+                System.out.println("MySQL offline: this report is stored only while the app is open.");
+            }
 
             incidents.add(incident);
 
@@ -418,6 +609,7 @@ public class Main extends Application {
                     "Incident ID: " + id + "\n\n" +
                     "Type: " + selectedType + "\n" +
                     "Location: " + selectedLocation + "\n" +
+                    "Description: " + selectedDescription + "\n" +
                     "Priority: " + selectedPriority + "\n" +
                     "Status: Reported"
             );
@@ -425,7 +617,10 @@ public class Main extends Application {
             alert.showAndWait();
 
             type.setValue(null);
-            location.clear();
+            location.setValue(null);
+            otherLocation.clear();
+            otherLocation.setVisible(false);
+            otherLocation.setManaged(false);
             description.clear();
             priorityLabel.setText(
                     "Priority: Not selected"
@@ -434,15 +629,16 @@ public class Main extends Application {
 
         Button back = secondaryButton("Logout");
 
-        back.setOnAction(e -> login());
+        back.setOnAction(e -> { currentUser = null; login(); });
 
         form.getChildren().addAll(
                 formTitle,
-                new Label("Emergency Type"),
+                requiredFieldLabel("Emergency Type"),
                 type,
-                new Label("Location"),
+                requiredFieldLabel("Location"),
                 location,
-                new Label("Description"),
+                otherLocation,
+                requiredFieldLabel("Description"),
                 description,
                 priorityLabel,
                 submit,
@@ -489,10 +685,13 @@ public class Main extends Application {
         );
 
         Button refresh = secondaryButton("Refresh");
-        refresh.setOnAction(e -> admin());
+        refresh.setOnAction(e -> {
+            refreshIncidentsFromDatabase();
+            admin();
+        });
 
         Button logout = secondaryButton("Logout");
-        logout.setOnAction(e -> login());
+        logout.setOnAction(e -> { currentUser = null; login(); });
 
         HBox buttons = new HBox(
                 10,
@@ -565,37 +764,41 @@ public class Main extends Application {
 
         TableView<Incident> table = table();
 
-        Button assign = primaryButton(
-                "Assign Selected"
-        );
-
+        ComboBox<Database.User> responderChoice = new ComboBox<>();
+        responderChoice.setPromptText("Choose a registered responder");
+        responderChoice.setPrefWidth(300);
+        styleField(responderChoice);
+        try {
+            responderChoice.setItems(FXCollections.observableArrayList(Database.getResponders()));
+        } catch (SQLException ex) {
+            showDatabaseWarning("Could not load responders: " + ex.getMessage());
+        }
+        Button assign = primaryButton("Assign Selected");
         assign.setPrefWidth(180);
-
         assign.setOnAction(e -> {
-
-            Incident selected =
-                    table.getSelectionModel()
-                            .getSelectedItem();
-
+            Incident selected = table.getSelectionModel().getSelectedItem();
+            Database.User responderUser = responderChoice.getValue();
             if (selected == null) {
-
-                new Alert(
-                        Alert.AlertType.WARNING,
-                        "Please select an emergency first."
-                ).showAndWait();
-
+                new Alert(Alert.AlertType.WARNING, "Please select an emergency first.").showAndWait();
                 return;
             }
-
-            selected.status.set("Assigned");
-
-            table.refresh();
-
-            new Alert(
-                    Alert.AlertType.INFORMATION,
-                    selected.id.get()
-                    + " has been assigned to a responder."
-            ).showAndWait();
+            if (responderUser == null) {
+                new Alert(Alert.AlertType.WARNING, "Please choose a registered responder. Create a Responder account first if the list is empty.").showAndWait();
+                return;
+            }
+            if (!databaseReady) {
+                showDatabaseWarning("A database connection is required to assign an incident to a specific responder.");
+                return;
+            }
+            try {
+                Database.assignIncident(selected.id.get(), responderUser.username);
+                selected.status.set("Assigned");
+                selected.assignedTo.set(responderUser.username);
+                table.refresh();
+                new Alert(Alert.AlertType.INFORMATION, selected.id.get() + " assigned to " + responderUser.fullName + " (@" + responderUser.username + ").").showAndWait();
+            } catch (SQLException ex) {
+                showDatabaseWarning("Could not save responder assignment: " + ex.getMessage());
+            }
         });
 
         VBox tableCard = card();
@@ -603,6 +806,8 @@ public class Main extends Application {
         tableCard.getChildren().addAll(
                 reports,
                 table,
+                new Label("Assign to responder"),
+                responderChoice,
                 assign
         );
 
@@ -840,7 +1045,7 @@ public class Main extends Application {
                 secondaryButton("Logout");
 
         logout.setOnAction(
-                e -> login()
+                e -> { currentUser = null; login(); }
         );
 
         top.getChildren().addAll(
@@ -871,6 +1076,15 @@ public class Main extends Application {
 
         TableView<Incident> table =
                 table();
+        if (currentUser != null && currentUser.role.equals("Responder")) {
+            ObservableList<Incident> assignedIncidents = FXCollections.observableArrayList();
+            for (Incident incident : incidents) {
+                if (currentUser.username.equalsIgnoreCase(incident.assignedTo.get())) {
+                    assignedIncidents.add(incident);
+                }
+            }
+            table.setItems(assignedIncidents);
+        }
 
         ComboBox<String> status =
                 new ComboBox<>(
@@ -926,6 +1140,15 @@ public class Main extends Application {
                     status.getValue()
             );
 
+            if (databaseReady) {
+                try {
+                    Database.updateStatus(selected.id.get(), status.getValue());
+                } catch (SQLException ex) {
+                    databaseReady = false;
+                    showDatabaseWarning("Status changed on screen, but could not be saved to MySQL. " + ex.getMessage());
+                }
+            }
+
             table.refresh();
 
             new Alert(
@@ -960,6 +1183,20 @@ public class Main extends Application {
         );
     }
 
+    String formatReportedAt(String value) {
+        if (value == null || value.isBlank()) {
+            return "N/A";
+        }
+
+        try {
+            LocalDateTime dateTime = LocalDateTime.parse(value, DB_DATE_TIME);
+            return dateTime.format(DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm"));
+        } catch (Exception ex) {
+            // Keep the original value visible if an older record uses another format.
+            return value;
+        }
+    }
+
     TableView<Incident> table() {
 
         TableView<Incident> table =
@@ -983,6 +1220,12 @@ public class Main extends Application {
                         x -> x.location
                 );
 
+        TableColumn<Incident, String> description =
+                column(
+                        "Description",
+                        x -> x.description
+                );
+
         TableColumn<Incident, String> priority =
                 column(
                         "Priority",
@@ -994,19 +1237,37 @@ public class Main extends Application {
                         "Status",
                         x -> x.status
                 );
+        TableColumn<Incident, String> assigned =
+                column(
+                        "Assigned To",
+                        x -> x.assignedTo
+                );
+        TableColumn<Incident, String> reportedAt =
+                column(
+                        "Reported Date & Time",
+                        x -> new SimpleStringProperty(
+                                formatReportedAt(x.reportedAt.get())
+                        )
+                );
 
-        id.setPrefWidth(100);
+        id.setPrefWidth(90);
         type.setPrefWidth(220);
         location.setPrefWidth(180);
+        description.setPrefWidth(250);
         priority.setPrefWidth(120);
-        status.setPrefWidth(150);
+        status.setPrefWidth(120);
+        assigned.setPrefWidth(130);
+        reportedAt.setPrefWidth(175);
 
         table.getColumns().addAll(
                 id,
                 type,
                 location,
+                description,
                 priority,
-                status
+                status,
+                assigned,
+                reportedAt
         );
 
         table.setItems(incidents);
@@ -1106,34 +1367,47 @@ public class Main extends Application {
         SimpleStringProperty id;
         SimpleStringProperty type;
         SimpleStringProperty location;
+        SimpleStringProperty description;
         SimpleStringProperty priority;
         SimpleStringProperty status;
+        SimpleStringProperty assignedTo;
+        SimpleStringProperty reportedAt;
 
         Incident(
                 String id,
                 String type,
                 String location,
+                String description,
                 String priority,
                 String status
         ) {
+            this(id, type, location, description, priority, status,
+                    LocalDateTime.now().format(DB_DATE_TIME));
+        }
 
-            this.id =
-                    new SimpleStringProperty(id);
-
-            this.type =
-                    new SimpleStringProperty(type);
-
-            this.location =
-                    new SimpleStringProperty(location);
-
-            this.priority =
-                    new SimpleStringProperty(priority);
-
-            this.status =
-                    new SimpleStringProperty(status);
+        Incident(
+                String id,
+                String type,
+                String location,
+                String description,
+                String priority,
+                String status,
+                String reportedAt
+        ) {
+            this.id = new SimpleStringProperty(id);
+            this.type = new SimpleStringProperty(type);
+            this.location = new SimpleStringProperty(location);
+            this.description = new SimpleStringProperty(description);
+            this.priority = new SimpleStringProperty(priority);
+            this.status = new SimpleStringProperty(status);
+            this.assignedTo = new SimpleStringProperty("Unassigned");
+            this.reportedAt = new SimpleStringProperty(
+                    reportedAt == null || reportedAt.isBlank()
+                            ? LocalDateTime.now().format(DB_DATE_TIME)
+                            : reportedAt
+            );
         }
     }
-
     public static void main(String[] args) {
         launch(args);
     }
