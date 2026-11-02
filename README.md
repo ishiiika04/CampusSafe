@@ -75,3 +75,4 @@ SELECT id, emergency_type, status, assigned_to FROM incidents;
 - `database/campussafe.sql` — database/table setup.
 - `docs/TEACHER_DEMO.md` — demo flow and explanation.
 - `pom.xml` — JavaFX and MySQL dependencies.
+Collaboration test - Anjali
