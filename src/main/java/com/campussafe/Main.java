@@ -24,6 +24,12 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 
+import java.awt.AWTException;
+import java.awt.SystemTray;
+import java.awt.TrayIcon;
+import java.awt.Toolkit;
+
+
 public class Main extends Application {
 
     static final DateTimeFormatter DB_DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -129,22 +135,55 @@ public class Main extends Application {
     }
 
     private void showAdminNotification(Incident incident) {
-        Alert notification = new Alert(Alert.AlertType.INFORMATION);
-        notification.setTitle("CampusSafe - New Emergency");
-        notification.setHeaderText("New Emergency Reported!");
-        notification.setContentText(
-                "Incident ID: " + incident.id.get() + "\n" +
-                "Type: " + incident.type.get() + "\n" +
-                "Location: " + incident.location.get() + "\n" +
-                "Priority: " + incident.priority.get() + "\n" +
-                "Status: " + incident.status.get()
-        );
-        if (stage != null) {
-            notification.initOwner(stage);
-        }
-        // Non-blocking popup, so the admin dashboard timer keeps running.
-        notification.show();
+    showWindowsNotification(
+            "CampusSafe - New Emergency",
+            "Incident ID: " + incident.id.get()
+                    + "\nType: " + incident.type.get()
+                    + "\nLocation: " + incident.location.get()
+                    + "\nPriority: " + incident.priority.get()
+                    + "\nStatus: " + incident.status.get()
+    );
     }
+
+private void showWindowsNotification(String title, String message) {
+    try {
+        if (!java.awt.SystemTray.isSupported()) {
+            System.out.println("Windows desktop notifications are not supported.");
+            return;
+        }
+
+        java.awt.SystemTray tray = java.awt.SystemTray.getSystemTray();
+
+        java.awt.TrayIcon trayIcon = new java.awt.TrayIcon(
+                new java.awt.image.BufferedImage(
+                        16, 16, java.awt.image.BufferedImage.TYPE_INT_ARGB
+                ),
+                "CampusSafe"
+        );
+
+        trayIcon.setImageAutoSize(true);
+        tray.add(trayIcon);
+
+        trayIcon.displayMessage(
+                title,
+                message,
+                java.awt.TrayIcon.MessageType.WARNING
+        );
+
+        new Thread(() -> {
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                tray.remove(trayIcon);
+            }
+        }).start();
+
+    } catch (java.awt.AWTException | java.awt.HeadlessException e) {
+        System.out.println("Notification error: " + e.getMessage());
+    }
+}
 
     private void startAdminNotificationTimer() {
         if (adminNotificationTimer != null) {
