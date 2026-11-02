@@ -187,6 +187,16 @@ public class Database {
         return incidents;
     }
 
+    public static int getNextIncidentNumber() throws SQLException {
+        String sql = "SELECT COALESCE(MAX(CAST(SUBSTRING(id, 5) AS UNSIGNED)), 0) + 1 FROM incidents";
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery(sql)) {
+            result.next();
+            return result.getInt(1);
+        }
+    }
+
     public static void assignIncident(String incidentId, String username) throws SQLException {
         String sql = "UPDATE incidents SET status = 'Assigned', assigned_to = ? WHERE id = ?";
         try (Connection connection = connect();

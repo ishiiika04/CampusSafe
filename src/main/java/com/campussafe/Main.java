@@ -1,9 +1,12 @@
 package com.campussafe;
 
 import javafx.application.Application;
+import javafx.beans.binding.Bindings;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+import javafx.collections.transformation.FilteredList;
+import javafx.collections.transformation.SortedList;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -33,6 +36,14 @@ public class Main extends Application {
     int incidentNumber = 1;
     boolean databaseReady = false;
     Database.User currentUser;
+
+    // Admin notification polling state
+    private javafx.animation.Timeline adminNotificationTimer;
+    private final java.util.Set<String> knownIncidentIds = new java.util.HashSet<>();
+
+    // Which admin screen is open: "dashboard" or "history"
+    private String adminScreen = "dashboard";
+    private String historySignature = "";
 
     String background = "#F4F7FB";
     String white = "#FFFFFF";
@@ -69,7 +80,10 @@ public class Main extends Application {
     }
 
     void loadIncidentsFromDatabase() throws SQLException {
-        List<Incident> savedIncidents = Database.getIncidents();
+        applyIncidents(Database.getIncidents());
+    }
+
+    void applyIncidents(List<Incident> savedIncidents) {
         incidents.setAll(savedIncidents);
 
         int largestNumber = 0;
@@ -96,11 +110,99 @@ public class Main extends Application {
         }
     }
 
+    // Small fingerprint of the list (id + status + assignee) to detect changes cheaply.
+    String signature(List<Incident> list) {
+        StringBuilder builder = new StringBuilder();
+        for (Incident incident : list) {
+            builder.append(incident.id.get()).append('|')
+                    .append(incident.status.get()).append('|')
+                    .append(incident.assignedTo.get()).append(';');
+        }
+        return builder.toString();
+    }
+
     void showDatabaseWarning(String details) {
         new Alert(
                 Alert.AlertType.WARNING,
                 details + "\n\nPlease check MySQL and src/main/java/com/campussafe/Database.java settings."
         ).showAndWait();
+    }
+
+    private void showAdminNotification(Incident incident) {
+        Alert notification = new Alert(Alert.AlertType.INFORMATION);
+        notification.setTitle("CampusSafe - New Emergency");
+        notification.setHeaderText("New Emergency Reported!");
+        notification.setContentText(
+                "Incident ID: " + incident.id.get() + "\n" +
+                "Type: " + incident.type.get() + "\n" +
+                "Location: " + incident.location.get() + "\n" +
+                "Priority: " + incident.priority.get() + "\n" +
+                "Status: " + incident.status.get()
+        );
+        if (stage != null) {
+            notification.initOwner(stage);
+        }
+        // Non-blocking popup, so the admin dashboard timer keeps running.
+        notification.show();
+    }
+
+    private void startAdminNotificationTimer() {
+        if (adminNotificationTimer != null) {
+            adminNotificationTimer.stop();
+        }
+
+        adminNotificationTimer = new javafx.animation.Timeline(
+                new javafx.animation.KeyFrame(
+                        javafx.util.Duration.seconds(3),
+                        event -> {
+                            if (!databaseReady || currentUser == null
+                                    || !"Admin".equalsIgnoreCase(currentUser.role)) {
+                                return;
+                            }
+
+                            try {
+                                List<Incident> latest = Database.getIncidents();
+                                List<Incident> newOnes = new java.util.ArrayList<>();
+
+                                // History screen open: keep it live (new reports and status changes)
+                                if ("history".equals(adminScreen)) {
+                                    String latestSignature = signature(latest);
+                                    if (!latestSignature.equals(historySignature)) {
+                                        applyIncidents(latest);
+                                        historySignature = latestSignature;
+                                    }
+                                }
+
+                                for (Incident incident : latest) {
+                                    if (knownIncidentIds.add(incident.id.get())) {
+                                        newOnes.add(incident);
+                                    }
+                                }
+
+                                if (!newOnes.isEmpty()) {
+                                    loadIncidentsFromDatabase();
+                                    if (!"history".equals(adminScreen)) {
+                                        admin(); // refresh stats, charts and table
+                                    }
+                                    for (Incident incident : newOnes) {
+                                        showAdminNotification(incident);
+                                    }
+                                }
+                            } catch (SQLException ex) {
+                                System.out.println("Admin notification check failed: " + ex.getMessage());
+                            }
+                        }
+                )
+        );
+        adminNotificationTimer.setCycleCount(javafx.animation.Animation.INDEFINITE);
+        adminNotificationTimer.play();
+    }
+
+    private void stopAdminNotificationTimer() {
+        if (adminNotificationTimer != null) {
+            adminNotificationTimer.stop();
+            adminNotificationTimer = null;
+        }
     }
 
     Label title(String value) {
@@ -568,6 +670,14 @@ public class Main extends Application {
                 return;
             }
 
+            // Always take the next free number from MySQL so two app windows never clash.
+            if (databaseReady) {
+                try {
+                    incidentNumber = Math.max(incidentNumber, Database.getNextIncidentNumber());
+                } catch (SQLException ignored) {
+                }
+            }
+
             String id = String.format(
                     "INC-%03d",
                     incidentNumber++
@@ -616,6 +726,14 @@ public class Main extends Application {
 
             alert.showAndWait();
 
+            Alert studentNotification = new Alert(Alert.AlertType.INFORMATION);
+            studentNotification.setTitle("CampusSafe Notification");
+            studentNotification.setHeaderText("Emergency Notification");
+            studentNotification.setContentText(
+                    "Your emergency " + id + " has been submitted successfully."
+            );
+            studentNotification.showAndWait();
+
             type.setValue(null);
             location.setValue(null);
             otherLocation.clear();
@@ -658,6 +776,8 @@ public class Main extends Application {
 
     void admin() {
 
+        adminScreen = "dashboard";
+
         BorderPane root = new BorderPane();
         root.setStyle(
                 "-fx-background-color:" + background + ";"
@@ -679,36 +799,64 @@ public class Main extends Application {
         );
 
         Region spacer = new Region();
-        HBox.setHgrow(
-                spacer,
-                Priority.ALWAYS
-        );
+HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        Button refresh = secondaryButton("Refresh");
-        refresh.setOnAction(e -> {
-            refreshIncidentsFromDatabase();
-            admin();
-        });
+Button historyButton = primaryButton("Incident History");
+historyButton.setPrefHeight(40);
+historyButton.setMinWidth(150);
+historyButton.setVisible(true);
+historyButton.setManaged(true);
+historyButton.setOnAction(e -> incidentHistory());
 
-        Button logout = secondaryButton("Logout");
-        logout.setOnAction(e -> { currentUser = null; login(); });
+Button refresh = secondaryButton("Refresh");
+refresh.setOnAction(e -> {
+    refreshIncidentsFromDatabase();
+    admin();
+});
 
-        HBox buttons = new HBox(
-                10,
-                refresh,
-                logout
-        );
+Button logout = secondaryButton("Logout");
+logout.setOnAction(e -> {
+    stopAdminNotificationTimer();
+    currentUser = null;
+    login();
+});
 
-        top.setAlignment(Pos.CENTER_LEFT);
-        top.getChildren().addAll(
-                heading,
-                spacer,
-                buttons
-        );
+HBox buttons = new HBox(10);
+buttons.setAlignment(Pos.CENTER_RIGHT);
+buttons.getChildren().addAll(historyButton, refresh, logout);
 
-        header.getChildren().add(top);
+top.setAlignment(Pos.CENTER_LEFT);
+top.setSpacing(15);
+top.getChildren().addAll(heading, spacer, buttons);
 
-        root.setTop(header);
+header.getChildren().add(top);
+root.setTop(header);
+
+
+        if (adminNotificationTimer == null) {
+            knownIncidentIds.clear();
+            int pending = 0;
+            for (Incident incident : incidents) {
+                knownIncidentIds.add(incident.id.get());
+                if ("Reported".equalsIgnoreCase(incident.status.get())) {
+                    pending++;
+                }
+            }
+            startAdminNotificationTimer();
+
+            if (pending > 0) {
+                final int count = pending;
+                javafx.application.Platform.runLater(() -> {
+                    Alert pendingAlert = new Alert(Alert.AlertType.INFORMATION);
+                    pendingAlert.setTitle("CampusSafe - Pending Emergencies");
+                    pendingAlert.setHeaderText("New emergencies need attention");
+                    pendingAlert.setContentText(count + " reported emergency(ies) are waiting to be assigned.");
+                    pendingAlert.initOwner(stage);
+                    pendingAlert.show();
+                });
+            }
+        }
+
 
         VBox content = new VBox(20);
         content.setPadding(
@@ -833,6 +981,174 @@ public class Main extends Application {
         stage.setScene(
                 new Scene(root, 1250, 850)
         );
+    }
+
+    String statusStyle(String value) {
+        return switch (value) {
+            case "Reported" -> "-fx-text-fill:#C0392B;-fx-font-weight:bold;";
+            case "Assigned" -> "-fx-text-fill:#2F6C99;-fx-font-weight:bold;";
+            case "Responding" -> "-fx-text-fill:#B7791F;-fx-font-weight:bold;";
+            case "Resolved" -> "-fx-text-fill:#2E8B57;-fx-font-weight:bold;";
+            default -> "";
+        };
+    }
+
+    void incidentHistory() {
+
+        adminScreen = "history";
+        refreshIncidentsFromDatabase();
+        historySignature = signature(incidents);
+
+        BorderPane root = new BorderPane();
+        root.setStyle("-fx-background-color:" + background + ";");
+
+        // ---------- Header ----------
+        VBox header = new VBox(5);
+        header.setPadding(new Insets(25, 30, 15, 30));
+
+        HBox top = new HBox();
+
+        VBox heading = new VBox(
+                4,
+                title("Incident History"),
+                subtitle("All previous emergency reports with their status and reported date & time")
+        );
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Button backButton = secondaryButton("Back to Dashboard");
+        backButton.setOnAction(e -> admin());
+
+        Button refreshButton = secondaryButton("Refresh");
+        refreshButton.setOnAction(e -> {
+            refreshIncidentsFromDatabase();
+            historySignature = signature(incidents);
+        });
+
+        Button logoutButton = secondaryButton("Logout");
+        logoutButton.setOnAction(e -> {
+            stopAdminNotificationTimer();
+            currentUser = null;
+            login();
+        });
+
+        top.setAlignment(Pos.CENTER_LEFT);
+        top.getChildren().addAll(
+                heading,
+                spacer,
+                new HBox(10, backButton, refreshButton, logoutButton)
+        );
+        header.getChildren().add(top);
+        root.setTop(header);
+
+        // ---------- Live status summary cards ----------
+        HBox summary = new HBox(15);
+        String[] statuses = {"Reported", "Assigned", "Responding", "Resolved"};
+        String[] cardColors = {red, blue, yellow, green};
+        for (int i = 0; i < statuses.length; i++) {
+            final String statusName = statuses[i];
+            VBox card = statCard(statusName, "0", cardColors[i]);
+            ((Label) card.getChildren().get(1)).textProperty().bind(
+                    Bindings.createStringBinding(
+                            () -> String.valueOf(countStatus(statusName)),
+                            incidents
+                    )
+            );
+            summary.getChildren().add(card);
+        }
+
+        // ---------- Filter + search ----------
+        FilteredList<Incident> filtered = new FilteredList<>(incidents, i -> true);
+
+        ComboBox<String> statusFilter = new ComboBox<>(
+                FXCollections.observableArrayList(
+                        "All Statuses", "Reported", "Assigned", "Responding", "Resolved"
+                )
+        );
+        statusFilter.setValue("All Statuses");
+        statusFilter.setPrefHeight(40);
+        statusFilter.setPrefWidth(190);
+        styleField(statusFilter);
+
+        TextField search = new TextField();
+        search.setPromptText("Search by ID, type, location or description");
+        search.setPrefHeight(40);
+        search.setPrefWidth(400);
+        styleField(search);
+
+        Runnable applyFilter = () -> {
+            String selectedStatus = statusFilter.getValue();
+            String query = normalizeText(search.getText());
+            filtered.setPredicate(incident -> {
+                boolean statusMatches = selectedStatus == null
+                        || selectedStatus.equals("All Statuses")
+                        || incident.status.get().equalsIgnoreCase(selectedStatus);
+                if (!statusMatches) {
+                    return false;
+                }
+                if (query.isEmpty()) {
+                    return true;
+                }
+                return normalizeText(incident.id.get()).contains(query)
+                        || normalizeText(incident.type.get()).contains(query)
+                        || normalizeText(incident.location.get()).contains(query)
+                        || normalizeText(incident.description.get()).contains(query);
+            });
+        };
+        statusFilter.setOnAction(e -> applyFilter.run());
+        search.textProperty().addListener((obs, oldValue, newValue) -> applyFilter.run());
+
+        // ---------- History table (newest first) ----------
+        TableView<Incident> historyTable = table();
+        SortedList<Incident> sorted = new SortedList<>(filtered);
+        sorted.comparatorProperty().bind(historyTable.comparatorProperty());
+        historyTable.setItems(sorted);
+
+        @SuppressWarnings("unchecked")
+        TableColumn<Incident, String> reportedColumn =
+                (TableColumn<Incident, String>) historyTable.getColumns().get(7);
+        reportedColumn.setSortType(TableColumn.SortType.DESCENDING);
+        historyTable.getSortOrder().add(reportedColumn);
+
+        historyTable.setPlaceholder(new Label("No incidents found."));
+        historyTable.setPrefHeight(430);
+
+        Label showing = new Label();
+        showing.setStyle("-fx-text-fill:" + secondaryText + ";-fx-font-size:13px;");
+        showing.textProperty().bind(
+                Bindings.createStringBinding(
+                        () -> "Showing " + filtered.size() + " of " + incidents.size() + " incidents",
+                        incidents,
+                        filtered
+                )
+        );
+
+        Label tableTitle = new Label("All Emergency Reports");
+        tableTitle.setStyle(
+                "-fx-font-size:21px;" +
+                "-fx-font-weight:bold;" +
+                "-fx-text-fill:" + text + ";"
+        );
+
+        HBox filters = new HBox(12, new Label("Status:"), statusFilter, search);
+        filters.setAlignment(Pos.CENTER_LEFT);
+
+        VBox tableCard = card();
+        tableCard.getChildren().addAll(tableTitle, filters, historyTable, showing);
+        VBox.setVgrow(historyTable, Priority.ALWAYS);
+
+        VBox content = new VBox(20);
+        content.setPadding(new Insets(10, 30, 30, 30));
+        content.getChildren().addAll(summary, tableCard);
+
+        ScrollPane scroll = new ScrollPane(content);
+        scroll.setFitToWidth(true);
+        scroll.setStyle("-fx-background:" + background + ";");
+
+        root.setCenter(scroll);
+
+        stage.setScene(new Scene(root, 1250, 850));
     }
 
     VBox statCard(
@@ -1183,20 +1499,6 @@ public class Main extends Application {
         );
     }
 
-    String formatReportedAt(String value) {
-        if (value == null || value.isBlank()) {
-            return "N/A";
-        }
-
-        try {
-            LocalDateTime dateTime = LocalDateTime.parse(value, DB_DATE_TIME);
-            return dateTime.format(DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm"));
-        } catch (Exception ex) {
-            // Keep the original value visible if an older record uses another format.
-            return value;
-        }
-    }
-
     TableView<Incident> table() {
 
         TableView<Incident> table =
@@ -1243,12 +1545,26 @@ public class Main extends Application {
                         x -> x.assignedTo
                 );
         TableColumn<Incident, String> reportedAt =
-                column(
-                        "Reported Date & Time",
-                        x -> new SimpleStringProperty(
-                                formatReportedAt(x.reportedAt.get())
-                        )
-                );
+                new TableColumn<>("Reported Date & Time");
+
+        reportedAt.setCellValueFactory(data ->
+                data.getValue().reportedAt
+        );
+
+        // Color-coded status text: Reported, Assigned, Responding, Resolved
+        status.setCellFactory(col -> new TableCell<Incident, String>() {
+            @Override
+            protected void updateItem(String value, boolean empty) {
+                super.updateItem(value, empty);
+                if (empty || value == null) {
+                    setText(null);
+                    setStyle("");
+                } else {
+                    setText(value);
+                    setStyle(statusStyle(value));
+                }
+            }
+        });
 
         id.setPrefWidth(90);
         type.setPrefWidth(220);
