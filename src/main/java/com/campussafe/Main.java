@@ -23,6 +23,16 @@ import java.time.format.DateTimeFormatter;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import javafx.stage.FileChooser;
+import javafx.stage.Modality;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 
 public class Main extends Application {
 
@@ -129,21 +139,162 @@ public class Main extends Application {
     }
 
     private void showAdminNotification(Incident incident) {
-        Alert notification = new Alert(Alert.AlertType.INFORMATION);
-        notification.setTitle("CampusSafe - New Emergency");
-        notification.setHeaderText("New Emergency Reported!");
-        notification.setContentText(
-                "Incident ID: " + incident.id.get() + "\n" +
-                "Type: " + incident.type.get() + "\n" +
-                "Location: " + incident.location.get() + "\n" +
-                "Priority: " + incident.priority.get() + "\n" +
-                "Status: " + incident.status.get()
+        showWindowsNotification(
+                "CampusSafe - New Emergency",
+                "Incident ID: " + incident.id.get()
+                        + "\nType: " + incident.type.get()
+                        + "\nLocation: " + incident.location.get()
+                        + "\nPriority: " + incident.priority.get()
+                        + "\nStatus: " + incident.status.get()
         );
-        if (stage != null) {
-            notification.initOwner(stage);
+    }
+
+    private void showWindowsNotification(String title, String message) {
+        try {
+            if (!java.awt.SystemTray.isSupported()) {
+                System.out.println("Windows desktop notifications are not supported.");
+                return;
+            }
+
+            java.awt.SystemTray tray = java.awt.SystemTray.getSystemTray();
+
+            java.awt.TrayIcon trayIcon = new java.awt.TrayIcon(
+                    new java.awt.image.BufferedImage(
+                            16, 16, java.awt.image.BufferedImage.TYPE_INT_ARGB
+                    ),
+                    "CampusSafe"
+            );
+
+            trayIcon.setImageAutoSize(true);
+            tray.add(trayIcon);
+
+            trayIcon.displayMessage(
+                    title,
+                    message,
+                    java.awt.TrayIcon.MessageType.WARNING
+            );
+
+            new Thread(() -> {
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    tray.remove(trayIcon);
+                }
+            }).start();
+
+        } catch (java.awt.AWTException | java.awt.HeadlessException e) {
+            System.out.println("Notification error: " + e.getMessage());
         }
-        // Non-blocking popup, so the admin dashboard timer keeps running.
-        notification.show();
+    }
+
+    // Opens the selected campus location in the browser (OpenStreetMap)
+    private void openEmergencyLocator(String campusLocation) {
+        try {
+            if (campusLocation == null || campusLocation.trim().isEmpty()) {
+                new Alert(
+                        Alert.AlertType.WARNING,
+                        "Please select a campus location first."
+                ).showAndWait();
+                return;
+            }
+
+            String query = java.net.URLEncoder.encode(
+                    campusLocation + ", campus",
+                    java.nio.charset.StandardCharsets.UTF_8
+            );
+
+            String mapUrl = "https://www.openstreetmap.org/search?query=" + query;
+
+            if (java.awt.Desktop.isDesktopSupported()) {
+                java.awt.Desktop.getDesktop().browse(
+                        new java.net.URI(mapUrl)
+                );
+            } else {
+                new Alert(
+                        Alert.AlertType.ERROR,
+                        "Unable to open the map in your browser."
+                ).showAndWait();
+            }
+
+        } catch (Exception ex) {
+            new Alert(
+                    Alert.AlertType.ERROR,
+                    "Unable to open the map: " + ex.getMessage()
+            ).showAndWait();
+        }
+    }
+
+    // Opens the browser, asks permission for the user's current location
+    // and then shows that point on OpenStreetMap.
+    private void openCurrentLocation() {
+        try {
+            if (!java.awt.Desktop.isDesktopSupported()
+                    || !java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.BROWSE)) {
+                new Alert(
+                        Alert.AlertType.ERROR,
+                        "Unable to open your browser."
+                ).showAndWait();
+                return;
+            }
+
+            String html = """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                <meta charset="UTF-8">
+                <title>CampusSafe - My Location</title>
+                <style>
+                body{font-family:Segoe UI,Arial,sans-serif;background:#F4F7FB;color:#28324A;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}
+                .box{background:#fff;border:1px solid #DCE2EC;border-radius:12px;padding:32px 40px;max-width:480px}
+                h2{margin:0 0 10px;color:#4F5F9F}
+                p{margin:6px 0;color:#68738A}
+                </style>
+                </head>
+                <body>
+                <div class="box">
+                <h2>CampusSafe</h2>
+                <p id="msg">Finding your current location... Please click Allow when the browser asks.</p>
+                </div>
+                <script>
+                var msg = document.getElementById('msg');
+                if (!navigator.geolocation) {
+                  msg.textContent = 'This browser does not support location.';
+                } else {
+                  navigator.geolocation.getCurrentPosition(function (p) {
+                    var la = p.coords.latitude.toFixed(6);
+                    var lo = p.coords.longitude.toFixed(6);
+                    msg.textContent = 'Location found. Opening map...';
+                    window.location.replace('https://www.openstreetmap.org/?mlat=' + la + '&mlon=' + lo + '#map=17/' + la + '/' + lo);
+                  }, function (err) {
+                    var t = 'Could not get your location.';
+                    if (err.code === 1) t = 'Location permission was denied. Allow location access for this page and try again.';
+                    else if (err.code === 2) t = 'Your location is unavailable right now. Check that Windows Location is on and Wi-Fi is connected.';
+                    else if (err.code === 3) t = 'Finding your location took too long. Please try again.';
+                    msg.textContent = t;
+                  }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+                }
+                </script>
+                </body>
+                </html>
+                """;
+
+            java.io.File page = java.io.File.createTempFile("campussafe_location", ".html");
+            page.deleteOnExit();
+            java.nio.file.Files.writeString(
+                    page.toPath(),
+                    html,
+                    java.nio.charset.StandardCharsets.UTF_8
+            );
+            java.awt.Desktop.getDesktop().browse(page.toURI());
+
+        } catch (Exception ex) {
+            new Alert(
+                    Alert.AlertType.ERROR,
+                    "Unable to open the location page: " + ex.getMessage()
+            ).showAndWait();
+        }
     }
 
     private void startAdminNotificationTimer() {
@@ -520,7 +671,6 @@ public class Main extends Application {
         type.setMaxWidth(Double.MAX_VALUE);
         styleField(type);
 
-        // Campus location dropdown. Replace/add options to match your actual campus map.
         ComboBox<String> location = new ComboBox<>(
                 FXCollections.observableArrayList(
                         "Main Gate",
@@ -569,6 +719,26 @@ public class Main extends Application {
             if (!isOther) {
                 otherLocation.clear();
             }
+        });
+
+        Button locatorButton = new Button("📍 Show My Current Location");
+        locatorButton.setMaxWidth(Double.MAX_VALUE);
+        locatorButton.setPrefHeight(40);
+        locatorButton.setStyle(
+                "-fx-background-color: " + primary + ";" +
+                "-fx-text-fill: white;" +
+                "-fx-font-weight: bold;" +
+                "-fx-background-radius: 8;" +
+                "-fx-cursor: hand;"
+        );
+        locatorButton.setOnAction(e -> {
+            String selectedLocation = location.getValue();
+
+            if ("Other Campus Location".equals(selectedLocation)) {
+                selectedLocation = otherLocation.getText().trim();
+            }
+
+            openCurrentLocation();
         });
 
         TextArea description = new TextArea();
@@ -756,6 +926,7 @@ public class Main extends Application {
                 requiredFieldLabel("Location"),
                 location,
                 otherLocation,
+                locatorButton,
                 requiredFieldLabel("Description"),
                 description,
                 priorityLabel,
@@ -799,38 +970,42 @@ public class Main extends Application {
         );
 
         Region spacer = new Region();
-HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox.setHgrow(spacer, Priority.ALWAYS);
 
-Button historyButton = primaryButton("Incident History");
-historyButton.setPrefHeight(40);
-historyButton.setMinWidth(150);
-historyButton.setVisible(true);
-historyButton.setManaged(true);
-historyButton.setOnAction(e -> incidentHistory());
+        Button historyButton = primaryButton("Incident History");
+        historyButton.setPrefHeight(40);
+        historyButton.setMinWidth(150);
+        historyButton.setVisible(true);
+        historyButton.setManaged(true);
+        historyButton.setOnAction(e -> incidentHistory());
 
-Button refresh = secondaryButton("Refresh");
-refresh.setOnAction(e -> {
-    refreshIncidentsFromDatabase();
-    admin();
-});
+        Button refresh = secondaryButton("Refresh");
+        refresh.setOnAction(e -> {
+            refreshIncidentsFromDatabase();
+            admin();
+        });
 
-Button logout = secondaryButton("Logout");
-logout.setOnAction(e -> {
-    stopAdminNotificationTimer();
-    currentUser = null;
-    login();
-});
+        Button logout = secondaryButton("Logout");
+        logout.setOnAction(e -> {
+            stopAdminNotificationTimer();
+            currentUser = null;
+            login();
+        });
 
-HBox buttons = new HBox(10);
-buttons.setAlignment(Pos.CENTER_RIGHT);
-buttons.getChildren().addAll(historyButton, refresh, logout);
+        Button exportButton = primaryButton("Export CSV");
+        exportButton.setMinWidth(120);
+        exportButton.setOnAction(e -> exportCsvDialog());
 
-top.setAlignment(Pos.CENTER_LEFT);
-top.setSpacing(15);
-top.getChildren().addAll(heading, spacer, buttons);
+        HBox buttons = new HBox(10);
+        buttons.setAlignment(Pos.CENTER_RIGHT);
+        buttons.getChildren().addAll(historyButton, exportButton, refresh, logout);
 
-header.getChildren().add(top);
-root.setTop(header);
+        top.setAlignment(Pos.CENTER_LEFT);
+        top.setSpacing(15);
+        top.getChildren().addAll(heading, spacer, buttons);
+
+        header.getChildren().add(top);
+        root.setTop(header);
 
 
         if (adminNotificationTimer == null) {
@@ -1020,6 +1195,10 @@ root.setTop(header);
         Button backButton = secondaryButton("Back to Dashboard");
         backButton.setOnAction(e -> admin());
 
+        Button exportButton = primaryButton("Export CSV");
+        exportButton.setMinWidth(120);
+        exportButton.setOnAction(e -> exportCsvDialog());
+
         Button refreshButton = secondaryButton("Refresh");
         refreshButton.setOnAction(e -> {
             refreshIncidentsFromDatabase();
@@ -1037,7 +1216,7 @@ root.setTop(header);
         top.getChildren().addAll(
                 heading,
                 spacer,
-                new HBox(10, backButton, refreshButton, logoutButton)
+                new HBox(10, exportButton, backButton, refreshButton, logoutButton)
         );
         header.getChildren().add(top);
         root.setTop(header);
@@ -1678,6 +1857,210 @@ root.setTop(header);
         return count;
     }
 
+    // ---------- CSV Export ----------
+
+    String[] csvColumnNames = {
+            "ID", "Emergency Type", "Location", "Description",
+            "Priority", "Status", "Assigned To", "Reported Date & Time"
+    };
+
+    String getColumnValue(Incident i, int col) {
+        return switch (col) {
+            case 0 -> i.id.get();
+            case 1 -> i.type.get();
+            case 2 -> i.location.get();
+            case 3 -> i.description.get();
+            case 4 -> i.priority.get();
+            case 5 -> i.status.get();
+            case 6 -> i.assignedTo.get();
+            default -> i.reportedAt.get();
+        };
+    }
+
+    // Har value ko quotes me daalte hain taaki comma/quotes se CSV kharab na ho
+    String csvSafe(String value) {
+        if (value == null) return "\"\"";
+        return "\"" + value.replace("\"", "\"\"") + "\"";
+    }
+
+    ComboBox<String> filterBox(String allText, List<String> options) {
+        ComboBox<String> box = new ComboBox<>();
+        box.getItems().add(allText);
+        box.getItems().addAll(options);
+        box.setValue(allText);
+        box.setPrefHeight(38);
+        box.setMaxWidth(Double.MAX_VALUE);
+        styleField(box);
+        return box;
+    }
+
+    List<String> distinctValues(int col) {
+        LinkedHashSet<String> set = new LinkedHashSet<>();
+        for (Incident i : incidents) {
+            set.add(getColumnValue(i, col));
+        }
+        return new ArrayList<>(set);
+    }
+
+    void exportCsvDialog() {
+        refreshIncidentsFromDatabase();
+
+        Stage dialog = new Stage();
+        dialog.initOwner(stage);
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.setTitle("Export CSV");
+
+        VBox box = new VBox(10);
+        box.setPadding(new Insets(25));
+        box.setStyle("-fx-background-color:" + background + ";");
+
+        Label heading = title("Export CSV");
+        heading.setStyle("-fx-font-size:22px;-fx-font-weight:bold;-fx-text-fill:" + text + ";");
+        Label note = subtitle("Filters choose karo. 'All' ka matlab us column par filter nahi lagega.");
+
+        // ----- Filters -----
+        ComboBox<String> statusBox = filterBox("All Statuses",
+                List.of("Reported", "Assigned", "Responding", "Resolved"));
+        ComboBox<String> priorityBox = filterBox("All Priorities",
+                List.of("CRITICAL", "HIGH", "MEDIUM", "LOW"));
+        ComboBox<String> typeBox = filterBox("All Types",
+                List.of("Fire Emergency", "Serious Medical Emergency", "Security Threat",
+                        "Accident", "Infrastructure Hazard", "Minor / General Issue"));
+        ComboBox<String> locationBox = filterBox("All Locations", distinctValues(2));
+        ComboBox<String> assignedBox = filterBox("All Responders", distinctValues(6));
+
+        DatePicker fromDate = new DatePicker();
+        fromDate.setPromptText("From date");
+        DatePicker toDate = new DatePicker();
+        toDate.setPromptText("To date");
+        HBox dates = new HBox(10, fromDate, toDate);
+
+        // ----- Columns jo file me chahiye -----
+        Label colHeading = new Label("File me kaun se columns chahiye:");
+        colHeading.setStyle("-fx-font-weight:bold;-fx-text-fill:" + text + ";");
+        CheckBox[] colChecks = new CheckBox[csvColumnNames.length];
+        FlowPane colPane = new FlowPane(15, 8);
+        for (int i = 0; i < csvColumnNames.length; i++) {
+            colChecks[i] = new CheckBox(csvColumnNames[i]);
+            colChecks[i].setSelected(true);
+            colPane.getChildren().add(colChecks[i]);
+        }
+
+        Label message = new Label();
+        message.setWrapText(true);
+        message.setStyle("-fx-text-fill:#C85A65;");
+
+        Button exportButton = primaryButton("Export to CSV");
+        exportButton.setMaxWidth(Double.MAX_VALUE);
+        Button cancelButton = secondaryButton("Cancel");
+        cancelButton.setMaxWidth(Double.MAX_VALUE);
+        cancelButton.setOnAction(e -> dialog.close());
+
+        exportButton.setOnAction(e -> {
+            // kam se kam ek column select hona chahiye
+            List<Integer> chosenCols = new ArrayList<>();
+            for (int i = 0; i < colChecks.length; i++) {
+                if (colChecks[i].isSelected()) chosenCols.add(i);
+            }
+            if (chosenCols.isEmpty()) {
+                message.setText("Please select at least one column.");
+                return;
+            }
+            if (fromDate.getValue() != null && toDate.getValue() != null
+                    && fromDate.getValue().isAfter(toDate.getValue())) {
+                message.setText("'From date' 'To date' se baad ki nahi ho sakti.");
+                return;
+            }
+
+            // ----- Filter lagao -----
+            List<Incident> result = new ArrayList<>();
+            for (Incident i : incidents) {
+                if (!statusBox.getValue().startsWith("All")
+                        && !i.status.get().equals(statusBox.getValue())) continue;
+                if (!priorityBox.getValue().startsWith("All")
+                        && !i.priority.get().equals(priorityBox.getValue())) continue;
+                if (!typeBox.getValue().startsWith("All")
+                        && !i.type.get().equals(typeBox.getValue())) continue;
+                if (!locationBox.getValue().startsWith("All")
+                        && !i.location.get().equals(locationBox.getValue())) continue;
+                if (!assignedBox.getValue().startsWith("All")
+                        && !i.assignedTo.get().equals(assignedBox.getValue())) continue;
+
+                if (fromDate.getValue() != null || toDate.getValue() != null) {
+                    try {
+                        LocalDate d = LocalDate.parse(i.reportedAt.get().substring(0, 10));
+                        if (fromDate.getValue() != null && d.isBefore(fromDate.getValue())) continue;
+                        if (toDate.getValue() != null && d.isAfter(toDate.getValue())) continue;
+                    } catch (Exception ex) {
+                        continue; // date samajh nahi aayi to skip
+                    }
+                }
+                result.add(i);
+            }
+
+            if (result.isEmpty()) {
+                message.setText("In filters ke hisaab se koi incident nahi mila.");
+                return;
+            }
+
+            // ----- File save karne ki jagah poocho -----
+            FileChooser chooser = new FileChooser();
+            chooser.setTitle("Save CSV File");
+            chooser.setInitialFileName("campussafe_incidents.csv");
+            chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("CSV Files", "*.csv"));
+            File file = chooser.showSaveDialog(dialog);
+            if (file == null) return; // user ne cancel kar diya
+
+            try (PrintWriter writer = new PrintWriter(
+                    new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8))) {
+
+                writer.print('\uFEFF'); // Excel me sahi dikhne ke liye
+
+                // header row
+                StringBuilder headerRow = new StringBuilder();
+                for (int c : chosenCols) {
+                    if (headerRow.length() > 0) headerRow.append(",");
+                    headerRow.append(csvSafe(csvColumnNames[c]));
+                }
+                writer.println(headerRow);
+
+                // data rows
+                for (Incident i : result) {
+                    StringBuilder row = new StringBuilder();
+                    for (int c : chosenCols) {
+                        if (row.length() > 0) row.append(",");
+                        row.append(csvSafe(getColumnValue(i, c)));
+                    }
+                    writer.println(row);
+                }
+
+                new Alert(Alert.AlertType.INFORMATION,
+                        result.size() + " incident(s) exported to:\n" + file.getAbsolutePath()).showAndWait();
+                dialog.close();
+
+            } catch (Exception ex) {
+                message.setText("Could not save file: " + ex.getMessage());
+            }
+        });
+
+        box.getChildren().addAll(
+                heading, note,
+                new Label("Status"), statusBox,
+                new Label("Priority"), priorityBox,
+                new Label("Emergency Type"), typeBox,
+                new Label("Location"), locationBox,
+                new Label("Assigned To"), assignedBox,
+                new Label("Reported Date Range"), dates,
+                colHeading, colPane,
+                exportButton, cancelButton, message
+        );
+
+        ScrollPane scroll = new ScrollPane(box);
+        scroll.setFitToWidth(true);
+        dialog.setScene(new Scene(scroll, 560, 760));
+        dialog.showAndWait();
+    }
+
     static class Incident {
 
         SimpleStringProperty id;
@@ -1724,6 +2107,7 @@ root.setTop(header);
             );
         }
     }
+
     public static void main(String[] args) {
         launch(args);
     }
