@@ -1,8 +1,7 @@
-# CampusSafe — Step 3 + Login Authentication + Responder Assignment
+**CampusSafe**
 
 Beginner-friendly JavaFX + MySQL/JDBC academic prototype.
 
-## Included
 - Real login checked against the MySQL `users` table.
 - Passwords are stored as salted PBKDF2 hashes, not plain text.
 - Student and Responder accounts can be created from the app.
@@ -12,7 +11,6 @@ Beginner-friendly JavaFX + MySQL/JDBC academic prototype.
 - Incident status updates and assignments are saved to MySQL.
 - Incident descriptions and assigned responder appear in the table.
 
-## Before running
 You need JDK 21 or newer, Maven, MySQL Server, and MySQL Workbench (or another way to run the SQL file).
 
 ### 1. Create the database
@@ -21,19 +19,17 @@ Open `database/campussafe.sql` in MySQL Workbench and execute the whole script. 
 ### 2. Set the MySQL password
 Open `src/main/java/com/campussafe/Database.java` and update these lines to match your local MySQL login:
 
-```java
 private static final String USER = "root";
 private static final String PASSWORD = "YOUR_MYSQL_PASSWORD";
-```
+
 
 Do not upload your real database password to GitHub.
 
 ### 3. Run in VS Code
 Open the folder that contains `pom.xml`, open Terminal → New Terminal, and run:
 
-```bash
+
 mvn javafx:run
-```
 
 The first run may take a few minutes while Maven downloads dependencies.
 
